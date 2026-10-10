@@ -2,96 +2,302 @@
 set -euo pipefail
 
 # ==============================================================================
-# Safe Cleanup Script for AI Search Journey Lab on Google Cloud Run
-# Deletes Cloud Run service and application images from Artifact Registry.
-# Preserves Artifact Registry repo, Secret Manager secrets, and Service Account.
+# Full GCP Cleanup Script for AI Search Journey Lab
+#
+# Deletes repo-specific billable resources:
+#   - Cloud Run service
+#   - Artifact Registry repository and all container images
+#   - BigQuery V3 dataset
+#   - Cloud Build storage bucket
+#
+# Preserves:
+#   - GCP project
+#   - Secret Manager secrets
+#   - Gemini API key secret
+#   - Google Maps API key secret
+#   - Service accounts
+#   - IAM bindings
+#   - Enabled APIs
+#
+# Usage:
+#   ./scripts/delete_cloud_run.sh
+#   ./scripts/delete_cloud_run.sh --yes
 # ==============================================================================
 
 PROJECT_ID="${PROJECT_ID:-ai-search-journey-lab}"
 REGION="${REGION:-us-central1}"
-REPOSITORY="${REPOSITORY:-ai-search-journey}"
+
 SERVICE="${SERVICE:-ai-search-journey-lab}"
-IMAGE_NAME="${IMAGE_NAME:-ai-search-journey-lab}"
+REPOSITORY="${REPOSITORY:-ai-search-journey}"
+BIGQUERY_DATASET="${BIGQUERY_DATASET:-ai_search_journey_v3}"
+CLOUDBUILD_BUCKET="${CLOUDBUILD_BUCKET:-${PROJECT_ID}_cloudbuild}"
 
 AUTO_CONFIRM=false
+
 if [[ "${1:-}" == "--yes" || "${1:-}" == "-y" ]]; then
   AUTO_CONFIRM=true
 fi
 
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
+section() {
+  echo ""
+  echo "----------------------------------------------------------------------"
+  echo "$1"
+  echo "----------------------------------------------------------------------"
+}
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+
+# ------------------------------------------------------------------------------
+# Header
+# ------------------------------------------------------------------------------
+
 echo "======================================================================"
-echo "⚠️  AI Search Journey Lab — Cloud Run Cleanup"
-echo "Project:          ${PROJECT_ID}"
-echo "Region:           ${REGION}"
-echo "Service:          ${SERVICE}"
-echo "Artifact Repo:    ${REPOSITORY}"
-echo "Image Name:       ${IMAGE_NAME}"
+echo "⚠️  AI Search Journey Lab — Full GCP Resource Cleanup"
+echo "======================================================================"
+echo "Project:              ${PROJECT_ID}"
+echo "Region:               ${REGION}"
+echo "Cloud Run Service:    ${SERVICE}"
+echo "Artifact Repository:  ${REPOSITORY}"
+echo "BigQuery Dataset:     ${BIGQUERY_DATASET}"
+echo "Cloud Build Bucket:   gs://${CLOUDBUILD_BUCKET}"
 echo "======================================================================"
 echo ""
-echo "This will delete:"
-echo "  1. Cloud Run service: '${SERVICE}' in '${REGION}'"
-echo "  2. Container image tags for: '${IMAGE_NAME}' in repository '${REPOSITORY}'"
+
+echo "This script WILL DELETE:"
+echo "  1. Cloud Run service"
+echo "  2. Artifact Registry repository and all container images"
+echo "  3. BigQuery dataset and all tables"
+echo "  4. Cloud Build storage bucket and its contents"
 echo ""
-echo "It will PRESERVE:"
-echo "  - Artifact Registry repository '${REPOSITORY}'"
-echo "  - Secret Manager secrets & versions"
-echo "  - Service Account & IAM permissions"
+
+echo "This script WILL PRESERVE:"
+echo "  - GCP project '${PROJECT_ID}'"
+echo "  - Secret Manager secrets and versions"
+echo "  - gemini-api-key"
+echo "  - google-maps-api-key"
+echo "  - Service Accounts"
+echo "  - IAM permissions"
 echo "  - Enabled GCP APIs"
+echo "  - Billing configuration"
 echo ""
 
-# 1. Verify required CLI tools
-command -v gcloud >/dev/null 2>&1 || { echo "❌ ERROR: gcloud CLI is required but not installed."; exit 1; }
 
-# 2. Confirmation prompt
+# ------------------------------------------------------------------------------
+# Verify CLI tools
+# ------------------------------------------------------------------------------
+
+command_exists gcloud || {
+  echo "❌ ERROR: gcloud CLI is required."
+  exit 1
+}
+
+command_exists bq || {
+  echo "❌ ERROR: bq CLI is required."
+  exit 1
+}
+
+
+# ------------------------------------------------------------------------------
+# Confirmation
+# ------------------------------------------------------------------------------
+
 if [[ "${AUTO_CONFIRM}" != "true" ]]; then
-  read -r -p "Are you sure you want to proceed with cleanup? (y/N): " CONFIRMATION
+  read -r -p "Are you sure you want to permanently remove these resources? (y/N): " CONFIRMATION
+
   if [[ ! "${CONFIRMATION}" =~ ^[Yy]$ ]]; then
-    echo "❌ Cleanup aborted by user."
+    echo "❌ Cleanup aborted."
     exit 0
   fi
 fi
 
-# 3. Verify GCP Project
-echo "⚙️ Setting active GCP project to '${PROJECT_ID}'..."
+
+# ------------------------------------------------------------------------------
+# Set project
+# ------------------------------------------------------------------------------
+
+section "Setting active GCP project"
+
 gcloud config set project "${PROJECT_ID}" --quiet
 
-# 4. Delete Cloud Run Service
-echo "☁️ Checking Cloud Run service '${SERVICE}' in '${REGION}'..."
-if gcloud run services describe "${SERVICE}" --region="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+ACTIVE_PROJECT="$(gcloud config get-value project 2>/dev/null)"
+
+if [[ "${ACTIVE_PROJECT}" != "${PROJECT_ID}" ]]; then
+  echo "❌ ERROR: Active project is '${ACTIVE_PROJECT}', expected '${PROJECT_ID}'."
+  exit 1
+fi
+
+echo "✓ Active project confirmed: ${ACTIVE_PROJECT}"
+
+
+# ------------------------------------------------------------------------------
+# 1. Cloud Run
+# ------------------------------------------------------------------------------
+
+section "1/4 — Cloud Run"
+
+if gcloud run services describe "${SERVICE}" \
+  --region="${REGION}" \
+  --project="${PROJECT_ID}" \
+  >/dev/null 2>&1; then
+
   echo "Deleting Cloud Run service '${SERVICE}'..."
+
   gcloud run services delete "${SERVICE}" \
     --region="${REGION}" \
     --project="${PROJECT_ID}" \
     --quiet
-  echo "✓ Cloud Run service '${SERVICE}' deleted."
+
+  echo "✓ Cloud Run service deleted."
 else
-  echo "ℹ️ Cloud Run service '${SERVICE}' does not exist (skipping)."
+  echo "ℹ️ Cloud Run service '${SERVICE}' does not exist. Skipping."
 fi
 
-# 5. Delete Container Images from Artifact Registry
-IMAGE_PACKAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}"
-echo "🐳 Checking container images in '${IMAGE_PACKAGE}'..."
 
-if gcloud artifacts docker images list "${IMAGE_PACKAGE}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-  IMAGE_COUNT="$(gcloud artifacts docker images list "${IMAGE_PACKAGE}" --project="${PROJECT_ID}" --format="value(IMAGE)" 2>/dev/null | wc -l | tr -d ' ')"
-  if [[ "${IMAGE_COUNT}" -gt 0 ]]; then
-    echo "Deleting ${IMAGE_COUNT} container image(s) under '${IMAGE_PACKAGE}'..."
-    gcloud artifacts docker images delete "${IMAGE_PACKAGE}" \
-      --project="${PROJECT_ID}" \
-      --delete-tags \
-      --quiet
-    echo "✓ Container images under '${IMAGE_PACKAGE}' deleted."
-  else
-    echo "ℹ️ No images found under '${IMAGE_PACKAGE}' (skipping)."
-  fi
+# ------------------------------------------------------------------------------
+# 2. Artifact Registry
+# ------------------------------------------------------------------------------
+
+section "2/4 — Artifact Registry"
+
+if gcloud artifacts repositories describe "${REPOSITORY}" \
+  --location="${REGION}" \
+  --project="${PROJECT_ID}" \
+  >/dev/null 2>&1; then
+
+  echo "Deleting Artifact Registry repository '${REPOSITORY}'..."
+  echo "This also deletes all container images and tags inside it."
+
+  gcloud artifacts repositories delete "${REPOSITORY}" \
+    --location="${REGION}" \
+    --project="${PROJECT_ID}" \
+    --quiet
+
+  echo "✓ Artifact Registry repository deleted."
 else
-  echo "ℹ️ No container package found for '${IMAGE_PACKAGE}' (skipping)."
+  echo "ℹ️ Artifact Registry repository '${REPOSITORY}' does not exist. Skipping."
 fi
+
+
+# ------------------------------------------------------------------------------
+# 3. BigQuery
+# ------------------------------------------------------------------------------
+
+section "3/4 — BigQuery"
+
+if bq show \
+  --project_id="${PROJECT_ID}" \
+  "${PROJECT_ID}:${BIGQUERY_DATASET}" \
+  >/dev/null 2>&1; then
+
+  echo "Deleting BigQuery dataset '${BIGQUERY_DATASET}' and all tables..."
+
+  bq rm \
+    -r \
+    -f \
+    -d \
+    "${PROJECT_ID}:${BIGQUERY_DATASET}"
+
+  echo "✓ BigQuery dataset deleted."
+else
+  echo "ℹ️ BigQuery dataset '${BIGQUERY_DATASET}' does not exist. Skipping."
+fi
+
+
+# ------------------------------------------------------------------------------
+# 4. Cloud Build Storage Bucket
+# ------------------------------------------------------------------------------
+
+section "4/4 — Cloud Build Storage"
+
+BUCKET_URI="gs://${CLOUDBUILD_BUCKET}"
+
+if gcloud storage buckets describe "${BUCKET_URI}" \
+  --project="${PROJECT_ID}" \
+  >/dev/null 2>&1; then
+
+  echo "Deleting Cloud Build bucket '${BUCKET_URI}' and all objects..."
+
+  gcloud storage rm \
+    --recursive \
+    "${BUCKET_URI}"
+
+  echo "✓ Cloud Build bucket deleted."
+else
+  echo "ℹ️ Cloud Build bucket '${BUCKET_URI}' does not exist. Skipping."
+fi
+
+
+# ------------------------------------------------------------------------------
+# Verification
+# ------------------------------------------------------------------------------
+
+section "Verification"
+
+echo ""
+echo "Cloud Run:"
+gcloud run services list \
+  --platform=managed \
+  --project="${PROJECT_ID}" \
+  --format="table(metadata.name,location)" || true
+
+echo ""
+echo "Artifact Registry:"
+gcloud artifacts repositories list \
+  --project="${PROJECT_ID}" \
+  --format="table(name,format,location)" || true
+
+echo ""
+echo "BigQuery datasets:"
+bq ls "${PROJECT_ID}:" || true
+
+echo ""
+echo "Cloud Storage buckets:"
+gcloud storage buckets list \
+  --project="${PROJECT_ID}" \
+  --format="value(name)" || true
+
+echo ""
+echo "Preserved Secret Manager secrets:"
+gcloud secrets list \
+  --project="${PROJECT_ID}" \
+  --format="value(name)" || true
+
+echo ""
+echo "Preserved Service Accounts:"
+gcloud iam service-accounts list \
+  --project="${PROJECT_ID}" \
+  --format="value(email)" || true
+
+
+# ------------------------------------------------------------------------------
+# Final
+# ------------------------------------------------------------------------------
 
 echo ""
 echo "======================================================================"
-echo "✅ Cleanup complete."
+echo "✅ AI Search Journey Lab GCP cleanup complete."
 echo ""
-echo "Redeploy with:"
-echo "./scripts/deploy_cloud_run.sh"
+echo "Deleted:"
+echo "  ✓ Cloud Run"
+echo "  ✓ Artifact Registry"
+echo "  ✓ BigQuery dataset"
+echo "  ✓ Cloud Build storage"
+echo ""
+echo "Preserved:"
+echo "  ✓ GCP project"
+echo "  ✓ Gemini API key / Secret Manager"
+echo "  ✓ Google Maps API key / Secret Manager"
+echo "  ✓ Service Accounts"
+echo "  ✓ IAM"
+echo "  ✓ Enabled APIs"
+echo ""
+echo "Local Docker / Grafana / Tempo / Prometheus are unaffected."
 echo "======================================================================"
-echo ""
