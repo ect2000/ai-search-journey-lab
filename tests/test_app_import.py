@@ -32,7 +32,7 @@ def test_quick_demo_presets() -> None:
     expected_baltimore_query = (
         "Find three primary care practices near Johns Hopkins Hospital in Baltimore "
         "that are open around noon. Compare distance, ratings, reviews, services, and hours, "
-        "then explain why you selected each one with citations."
+        "and explain each choice with citations."
     )
     assert DEFAULT_BALTIMORE_QUERY == expected_baltimore_query
     assert DEFAULT_PRIMARY_CARE_QUERY == expected_baltimore_query
