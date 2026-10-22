@@ -58,6 +58,14 @@ DEFAULT_XAVIER_QUERY = (
     "open after 8 PM. Recommend the top 3."
 )
 
+DEFAULT_BALTIMORE_PRIMARY_CARE_QUERY = (
+    "Find three primary care practices near Johns Hopkins Hospital in Baltimore "
+    "that are open around noon. Compare distance, ratings, reviews, services, and hours, "
+    "then explain why you selected each one with citations."
+)
+DEFAULT_PRIMARY_CARE_QUERY = DEFAULT_BALTIMORE_PRIMARY_CARE_QUERY
+DEFAULT_BALTIMORE_QUERY = DEFAULT_BALTIMORE_PRIMARY_CARE_QUERY
+
 
 _endpoints_logged: bool = False
 
@@ -102,6 +110,7 @@ def render_app() -> None:
                 "Indian Restaurant @ Trinity",
                 "Pediatric Dentist @ UH",
                 "Cajun / Crawfish @ Xavier",
+                "Primary Care @ Johns Hopkins Baltimore",
                 "Custom",
             ],
             index=0,
@@ -114,6 +123,8 @@ def render_app() -> None:
         default_val = DEFAULT_DENTIST_QUERY
     elif preset == "Cajun / Crawfish @ Xavier":
         default_val = DEFAULT_XAVIER_QUERY
+    elif preset == "Primary Care @ Johns Hopkins Baltimore":
+        default_val = DEFAULT_PRIMARY_CARE_QUERY
     elif preset == "Custom":
         default_val = ""
 
