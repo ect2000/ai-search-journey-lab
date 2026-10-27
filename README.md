@@ -725,13 +725,21 @@ Removes the Cloud Run service and Artifact Registry container images while prese
 
 Contributions, feedback, and experiment ideas are welcome!
 
-1. Fork the repository.
-2. Create a feature branch: `git checkout -b feature/new-search-capability`.
-3. Ensure all tests and linters pass:
+Please refer to the complete [Contributing Guide](CONTRIBUTING.md) for step-by-step instructions on:
+- Prerequisites and environment setup
+- Running the Streamlit Journey Inspector and CLI demos locally
+- Running tests (`pytest`), linter (`ruff`), and static type checks (`mypy`)
+- Docker workflows and observability setup
+- Branch naming, commit messages, and Pull Request guidelines
+- Troubleshooting and documentation guidelines
+
+Quick contribution workflow:
+1. Fork the repository and create a feature branch (`feature/<name>`, `fix/<name>`, or `docs/<name>`).
+2. Implement your changes and verify quality checks:
    ```bash
    python -m pytest -v && python -m ruff check . && python -m mypy src
    ```
-4. Submit a Pull Request.
+3. Submit a Pull Request referencing the related issue.
 
 ---
 
